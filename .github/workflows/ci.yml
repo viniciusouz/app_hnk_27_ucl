@@ -17,11 +17,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Varre todo o historico atras de chaves e tokens commitados por engano
+      # Varre TODO o historico atras de chaves e tokens commitados por engano.
+      # CLI direto (nao a action): em PR a action escaneia "primeiro_commit^..head",
+      # que quebra quando o primeiro commit e raiz, como o import deste repo.
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.24.3
+        run: |
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar xz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact --verbose --exit-code 1
 
       - uses: actions/setup-node@v4
         with:
