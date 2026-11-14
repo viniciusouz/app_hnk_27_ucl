@@ -17,6 +17,10 @@ import { generateJobId } from "@/lib/security";
 import { readPrivateObject } from "@/lib/storage";
 import { validatePersonName } from "@/lib/validation";
 
+// O processamento roda via after() nesta mesma funcao: IA + composicao + Plano B
+// cabem com folga em 300s (limite do Fluid Compute na Vercel).
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => null)) as {
     selfiePath?: unknown;

@@ -1,212 +1,230 @@
 {
-  "name": "Arquibancada UCL 2027 - Heineken (Nano Banana 2.1 1K)",
+  "name": "Arquibancada UCL 2027 | Composicao IA (cloud)",
   "nodes": [
     {
+      "name": "Webhook Arquibancada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
       "parameters": {
         "httpMethod": "POST",
         "path": "arquibancada-ucl2027",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "cloud-node-webhook",
-      "name": "Webhook Arquibancada",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [200, 300],
-      "webhookId": "arquibancada-ucl2027"
+      "webhookId": "arquibancada-ucl2027",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "HNK Arquibancada | webhook"
+        }
+      }
     },
     {
-      "parameters": {
-        "jsCode": "const rawHeaders = $json.headers || {};\nconst headers = Object.fromEntries(\n  Object.entries(rawHeaders).map(([k, v]) => [String(k).toLowerCase(), v])\n);\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : $json;\nconst jobId = String(body.jobId || '').trim();\nconst geminiApiKey = String(headers['x-gemini-api-key'] || '').trim();\nconst authorized = Boolean(/^[a-zA-Z0-9_-]{3,32}$/.test(jobId) && geminiApiKey.length >= 20);\n\nreturn [\n  {\n    json: {\n      authorized,\n      jobId,\n      names: Array.isArray(body.names) ? body.names : [],\n      retrySeat1: Boolean(body.retrySeat1),\n      geminiApiKey,\n      masterBase64: typeof body.masterBase64 === 'string' ? body.masterBase64 : '',\n      selfieBase64: typeof body.selfieBase64 === 'string' ? body.selfieBase64 : '',\n      jerseyBase64: typeof body.jerseyBase64 === 'string' ? body.jerseyBase64 : '',\n      masterUrl: typeof body.masterUrl === 'string' ? body.masterUrl : '',\n      selfieSignedUrl: typeof body.selfieSignedUrl === 'string' ? body.selfieSignedUrl : '',\n      jerseyUrl: typeof body.jerseyUrl === 'string' ? body.jerseyUrl : '',\n      startedAt: Date.now()\n    }\n  }\n];"
-      },
-      "id": "cloud-node-validate",
-      "name": "Validar Payload e Chave",
+      "name": "Validar Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Valida o corpo antes de gastar cota do Gemini. Sem download de URLs: evita SSRF.\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : {};\nconst MAX_B64 = 12 * 1024 * 1024; // ~9 MB binario por imagem\nconst isB64 = (s) => typeof s === 'string' && s.length > 100 && s.length < MAX_B64 && /^[A-Za-z0-9+/=\\r\\n]+$/.test(s.slice(0, 2000));\nconst strip = (s) => String(s || '').replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/i, '').trim();\n\nconst jobId = String(body.jobId || '').trim();\nconst names = Array.isArray(body.names) ? body.names.map((n) => String(n || '').trim()).slice(0, 3) : [];\nconst masterBase64 = strip(body.masterBase64);\nconst selfieBase64 = strip(body.selfieBase64);\nconst jerseyBase64 = strip(body.jerseyBase64);\n\nconst errors = [];\nif (!/^[a-zA-Z0-9_-]{3,32}$/.test(jobId)) errors.push('jobId');\nif (names.length !== 3 || names.some((n) => !n || n.length > 24)) errors.push('names');\nif (!isB64(masterBase64)) errors.push('masterBase64');\nif (!isB64(selfieBase64)) errors.push('selfieBase64');\nif (!isB64(jerseyBase64)) errors.push('jerseyBase64');\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    jobId,\n    names,\n    retrySeat1: body.retrySeat1 === true,\n    masterBase64,\n    selfieBase64,\n    jerseyBase64,\n    startedAt: Date.now()\n  }\n}];"
+      }
     },
     {
+      "name": "Payload Valido",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
       "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "strict",
+            "version": 2
           },
           "conditions": [
             {
-              "id": "check-authorized-bool",
-              "leftValue": "={{ $json.authorized }}",
+              "id": "payload-valid",
+              "leftValue": "={{ $json.valid }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
-                "operation": "equals"
+                "operation": "true",
+                "singleValue": true
               }
             }
           ],
           "combinator": "and"
         },
         "options": {}
-      },
-      "id": "cloud-node-if-auth",
-      "name": "Requisicao Autorizada",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [680, 300]
+      }
     },
     {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ { \"ok\": false, \"error\": \"Unauthorized or missing parameters\" } }}",
-        "options": {
-          "responseCode": 401
-        }
-      },
-      "id": "cloud-node-respond-401",
-      "name": "Responder 401",
+      "name": "Responder 400",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [920, 480]
+      "position": [
+        720,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"error\": \"invalid_payload\", \"fields\": $json.errors } }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
     },
     {
-      "parameters": {
-        "jsCode": "const stripDataUri = (s) =>\n  String(s || '').replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/i, '').trim();\n\nconst resolveImageBase64 = async (b64, url) => {\n  const cleaned = stripDataUri(b64);\n  if (cleaned) return cleaned;\n  if (typeof url === 'string' && url.startsWith('https://')) {\n    const raw = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      encoding: 'arraybuffer'\n    });\n    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);\n    return buf.toString('base64');\n  }\n  return '';\n};\n\nconst masterB64 = await resolveImageBase64($json.masterBase64, $json.masterUrl);\nconst selfieB64 = await resolveImageBase64($json.selfieBase64, $json.selfieSignedUrl);\nconst jerseyB64 = await resolveImageBase64($json.jerseyBase64, $json.jerseyUrl);\n\nconst promptB = [\n  \"EDIT: In Image 1, there are four empty glossy green stadium seats in the front row between two red edge seats. Seat one adult person ONLY in Seat 1 on the far left (the green seat immediately next to the red seat on the left border, directly in front of the cheering man in the plain white t-shirt, centered at x=17% and strictly within x=5% to x=26%). Seats 2, 3 and 4 to the right MUST stay 100% empty, uncovered and untouched.\",\n  \"SOURCE: Image 2 supplies the foreground person's exact identity only; ignore its background, other people, original clothing, lighting and framing. Image 3 supplies the green football shirt only; ignore its white background.\",\n  \"IDENTITY LOCK: Treat Image 2 as strict biometric identity evidence, not inspiration. Preserve exact gender presentation, skin tone, facial proportions, eye shape and spacing, nose, mouth, jawline, facial hair if present, hairline, full hair length, curl pattern and hair volume, apparent age and natural skin texture, with matching neck and arm skin tone. Do not beautify, lighten or darken skin tone, alter hair texture, or substitute a similar person.\",\n  \"SCALE AND POSE LOCK: Match the exact head and shoulder scale of the fans standing immediately behind the green seats so the person fits compactly inside Seat 1 alone (never oversized across two seats). Seated upright facing the camera inside Seat 1, both knees and thighs kept together strictly within Seat 1, the person's right fist (on the viewer's far left, near the left border) raised in celebration, and the person's left arm tucked close to their own torso with the left hand resting on their own left thigh inside x<=25% so no elbow, forearm or shirt crosses into Seat 2 (in front of the striped red-and-black shirt). Plain dark trousers, warm authentic open smile.\",\n  \"PRODUCT LOCK: Reproduce the green football shirt from Image 3 with its exact dark green color, vertical white lettering, starball and shield crests, and red-and-white collar and sleeve trims fitted naturally. Do not redesign or invent text.\",\n  \"PRESERVE: Camera, crop, Brazilian crowd in European club shirts behind, lighting and colors of Image 1. Seats 2, 3 and 4 on the right keep their clean glossy green backrests and red stars completely visible and unobstructed.\",\n  \"INTEGRATE: Match the cool stadium floodlight from the upper front left with realistic contact shadows on Seat 1 and natural highlights on hair, skin and jersey.\",\n  \"AVOID: Never place the person in Seat 2, 3 or 4. Never spread knees or elbows into Seat 2. No text or names added to any seat. No second person from Image 2. Nothing held in the hands.\"\n].join('\\n');\n\nconst retryPrefix = \"CRITICAL CORRECTION: Seat the person ONLY in the 1st leftmost green chair right next to the left-edge red seat, directly in front of the white t-shirt fan. Keep the 2nd, 3rd and 4th green chairs 100% empty. \";\nconst finalPrompt = $json.retrySeat1 ? retryPrefix + promptB : promptB;\n\nreturn [\n  {\n    json: {\n      jobId: $json.jobId,\n      names: $json.names,\n      retrySeat1: Boolean($json.retrySeat1),\n      startedAt: $json.startedAt,\n      geminiApiKey: $json.geminiApiKey,\n      geminiBody: {\n        contents: [\n          {\n            role: 'user',\n            parts: [\n              { text: finalPrompt },\n              { inline_data: { mime_type: 'image/jpeg', data: masterB64 } },\n              { inline_data: { mime_type: 'image/jpeg', data: selfieB64 } },\n              { inline_data: { mime_type: 'image/png', data: jerseyB64 } }\n            ]\n          }\n        ],\n        generationConfig: {\n          responseModalities: ['IMAGE'],\n          imageConfig: {\n            aspectRatio: '4:5',\n            imageSize: '1K'\n          },\n          thinkingConfig: {\n            thinkingLevel: 'HIGH'\n          }\n        }\n      }\n    }\n  }\n];"
-      },
-      "id": "cloud-node-build-payload",
-      "name": "Montar Payload Nano Banana 2.1 (1K)",
+      "name": "Montar Requisicao Gemini",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [920, 200]
+      "position": [
+        720,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "// Modelo fixo no servidor: o app nao escolhe modelo nem prompt.\nconst MODEL = 'gemini-nano-banana-2.1';\nconst PROMPT_B = \"EDIT: In Image 1, there are four empty glossy green stadium seats in the front row between two red edge seats. Seat one adult person ONLY in Seat 1 on the far left (the green seat immediately next to the red seat on the left border, directly in front of the cheering man in the plain white t-shirt, centered at x=17% and strictly within x=5% to x=26%). Seats 2, 3 and 4 to the right MUST stay 100% empty, uncovered and untouched.\\nSOURCE: Image 2 supplies the foreground person's exact identity only; ignore its background, other people, original clothing, lighting and framing. Image 3 supplies the green football shirt only; ignore its white background.\\nIDENTITY LOCK: Treat Image 2 as strict biometric identity evidence, not inspiration. Preserve exact gender presentation, skin tone, facial proportions, eye shape and spacing, nose, mouth, jawline, facial hair if present, hairline, full hair length, curl pattern and hair volume, apparent age and natural skin texture, with matching neck and arm skin tone. Do not beautify, lighten or darken skin tone, alter hair texture, or substitute a similar person.\\nSCALE AND POSE LOCK: Match the exact head and shoulder scale of the fans standing immediately behind the green seats so the person fits compactly inside Seat 1 alone (never oversized across two seats). Seated upright facing the camera inside Seat 1, both knees and thighs kept together strictly within Seat 1, the person's right fist (on the viewer's far left, near the left border) raised in celebration, and the person's left arm tucked close to their own torso with the left hand resting on their own left thigh inside x<=25% so no elbow, forearm or shirt crosses into Seat 2 (in front of the striped red-and-black shirt). Plain dark trousers, warm authentic open smile.\\nPRODUCT LOCK: Reproduce the green football shirt from Image 3 with its exact dark green color, vertical white lettering, starball and shield crests, and red-and-white collar and sleeve trims fitted naturally. Do not redesign or invent text.\\nPRESERVE: Camera, crop, Brazilian crowd in European club shirts behind, lighting and colors of Image 1. Seats 2, 3 and 4 on the right keep their clean glossy green backrests and red stars completely visible and unobstructed.\\nINTEGRATE: Match the cool stadium floodlight from the upper front left with realistic contact shadows on Seat 1 and natural highlights on hair, skin and jersey.\\nAVOID: Never place the person in Seat 2, 3 or 4. Never spread knees or elbows into Seat 2. No text or names added to any seat. No second person from Image 2. Nothing held in the hands.\";\nconst RETRY_PREFIX = \"CRITICAL CORRECTION: Seat the person ONLY in the 1st leftmost green chair right next to the left-edge red seat, directly in front of the white t-shirt fan. Keep the 2nd, 3rd and 4th green chairs 100% empty. \";\n\nconst prompt = ($json.retrySeat1 ? RETRY_PREFIX : '') + PROMPT_B;\n\nreturn [{\n  json: {\n    jobId: $json.jobId,\n    startedAt: $json.startedAt,\n    retrySeat1: $json.retrySeat1,\n    model: MODEL,\n    geminiBody: {\n      contents: [{\n        role: 'user',\n        parts: [\n          { text: prompt },\n          { inline_data: { mime_type: 'image/jpeg', data: $json.masterBase64 } },\n          { inline_data: { mime_type: 'image/jpeg', data: $json.selfieBase64 } },\n          { inline_data: { mime_type: 'image/png', data: $json.jerseyBase64 } }\n        ]\n      }],\n      generationConfig: {\n        responseModalities: ['IMAGE'],\n        imageConfig: { aspectRatio: '4:5', imageSize: '1K' },\n        thinkingConfig: { thinkingLevel: 'HIGH' }\n      }\n    }\n  }\n}];"
+      }
     },
     {
+      "name": "Gemini Nano Banana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -80
+      ],
       "parameters": {
         "method": "POST",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-nano-banana-2.1:generateContent",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "x-goog-api-key",
-              "value": "={{ $json.geminiApiKey }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $json.model + ':generateContent' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.geminiBody) }}",
         "options": {
-          "timeout": 75000
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
-      "id": "cloud-node-gemini",
-      "name": "Gemini Nano Banana 2.1 (1K)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1180, 200],
-      "alwaysOutputData": true,
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 2000,
-      "onError": "continueRegularOutput"
+      "credentials": {
+        "googlePalmApi": {
+          "id": "AAAq0ztNYxjK3Tbd",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
     },
     {
-      "parameters": {
-        "jsCode": "const meta = $('Montar Payload Nano Banana 2.1 (1K)').first().json;\nconst candidate = $json?.candidates?.[0];\nconst finishReason = String(candidate?.finishReason || '');\nconst parts = candidate?.content?.parts || [];\nlet foundData = null;\nfor (const p of parts) {\n  const inline = p?.inlineData || p?.inline_data;\n  if (inline?.data) {\n    foundData = inline.data;\n    break;\n  }\n}\n\nconst errText = JSON.stringify($json?.error || '').toLowerCase();\nconst isSafetyRefusal =\n  ['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'RECITATION'].includes(finishReason) ||\n  errText.includes('safety');\n\nreturn [\n  {\n    json: {\n      ok: Boolean(foundData) && !isSafetyRefusal,\n      jobId: meta.jobId,\n      retrySeat1: Boolean(meta.retrySeat1),\n      finishReason: finishReason || ($json?.error ? 'UPSTREAM_ERROR' : ''),\n      modelRefused: isSafetyRefusal,\n      composedImageBase64: foundData,\n      durationMs: Math.max(0, Date.now() - Number(meta.startedAt || Date.now())),\n      model: 'gemini-nano-banana-2.1',\n      imageSize: '1K',\n      orchestrator: 'n8n-cloud'\n    }\n  }\n];"
-      },
-      "id": "cloud-node-extract",
-      "name": "Extrair Imagem Gemini (1K)",
+      "name": "Extrair Imagem",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1440, 200]
+      "position": [
+        1200,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const meta = $('Montar Requisicao Gemini').first().json;\nconst candidate = $json?.candidates?.[0];\nconst finishReason = String(candidate?.finishReason || '');\nconst parts = candidate?.content?.parts || [];\nlet foundData = null;\nfor (const p of parts) {\n  const inline = p?.inlineData || p?.inline_data;\n  if (inline?.data) { foundData = inline.data; break; }\n}\nconst upstreamError = $json?.error ? String($json.error.status || $json.error.code || 'UPSTREAM_ERROR') : '';\nconst errText = JSON.stringify($json?.error || '').toLowerCase();\nconst modelRefused =\n  ['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'RECITATION'].includes(finishReason) ||\n  errText.includes('safety');\n\n// Nunca devolve o corpo bruto do Google: so o que o app precisa.\nreturn [{\n  json: {\n    ok: Boolean(foundData) && !modelRefused,\n    jobId: meta.jobId,\n    retrySeat1: Boolean(meta.retrySeat1),\n    finishReason: finishReason || upstreamError,\n    modelRefused,\n    composedImageBase64: modelRefused ? null : foundData,\n    durationMs: Math.max(0, Date.now() - Number(meta.startedAt || Date.now())),\n    model: meta.model,\n    imageSize: '1K',\n    orchestrator: 'n8n-cloud'\n  }\n}];"
+      }
     },
     {
+      "name": "Responder Resultado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        -80
+      ],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ $json }}",
         "options": {
           "responseCode": 200
         }
-      },
-      "id": "cloud-node-respond-ok",
-      "name": "Responder Resultado IA",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [1680, 200]
+      }
     }
   ],
-  "pinData": {},
   "connections": {
     "Webhook Arquibancada": {
       "main": [
         [
           {
-            "node": "Validar Payload e Chave",
+            "node": "Validar Payload",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Validar Payload e Chave": {
+    "Validar Payload": {
       "main": [
         [
           {
-            "node": "Requisicao Autorizada",
+            "node": "Payload Valido",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Requisicao Autorizada": {
+    "Payload Valido": {
       "main": [
         [
           {
-            "node": "Montar Payload Nano Banana 2.1 (1K)",
+            "node": "Montar Requisicao Gemini",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Responder 401",
+            "node": "Responder 400",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Montar Payload Nano Banana 2.1 (1K)": {
+    "Montar Requisicao Gemini": {
       "main": [
         [
           {
-            "node": "Gemini Nano Banana 2.1 (1K)",
+            "node": "Gemini Nano Banana",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Gemini Nano Banana 2.1 (1K)": {
+    "Gemini Nano Banana": {
       "main": [
         [
           {
-            "node": "Extrair Imagem Gemini (1K)",
+            "node": "Extrair Imagem",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Extrair Imagem Gemini (1K)": {
+    "Extrair Imagem": {
       "main": [
         [
           {
-            "node": "Responder Resultado IA",
+            "node": "Responder Resultado",
             "type": "main",
             "index": 0
           }
@@ -214,9 +232,14 @@
       ]
     }
   },
-  "active": false,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "executionTimeout": 120
   },
-  "versionId": "2.0.0"
+  "meta": {
+    "note": "Sem $env e sem segredos. Credenciais: 'HNK Arquibancada | webhook' (Header Auth, header x-internal-secret) e 'Google Gemini(PaLM) Api account'."
+  }
 }

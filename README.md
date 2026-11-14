@@ -84,23 +84,32 @@ Acesse `http://localhost:3033` (ou `http://localhost:3033/?pitch=1` para alterna
 
 ---
 
-## Variaveis de ambiente (`.env.example`)
+## Seguranca e segredos
 
-| Variavel | Descricao | Padrao / Exemplo |
+Regra unica: **a chave do Gemini mora em um lugar so, dentro do n8n**, como credencial. Ela nao existe no codigo, no navegador, no Git nem trafega entre Next.js e n8n.
+
+| Segredo | Onde vive | Para que serve |
 | --- | --- | --- |
-| `NEXT_PUBLIC_APP_URL` | URL publica usada em links `/s/[id]` e Open Graph | `http://localhost:3033` |
-| `NEXT_PUBLIC_CLUBE_HEINEKEN_URL` | Link de cadastro no Clube Heineken | `https://clube.heineken.com.br/` |
-| `N8N_WEBHOOK_URL` | Webhook do n8n para Modo A (opcional) | vazio |
-| `GEMINI_API_KEY` | Chave Gemini para Modo B direto (opcional) | vazio |
-| `NANO_BANANA_MODEL` | Modelo Gemini de composicao | `gemini-nano-banana-2.1` |
-| `INTERNAL_SIGNING_SECRET` | Segredo HMAC e header `x-internal-secret` | `dev-secret-trocar-em-producao-hnk-ucl-2027` |
-| `AI_TIMEOUT_MS` | Timeout do watchdog local e chamada Gemini (ms) | `90000` |
-| `DRIVE_OUTPUT_DIR` | Pasta de destino para gravacao de selfies e resultados pelo n8n | opcional |
-| `BLOB_READ_WRITE_TOKEN` | Token do Vercel Blob (opcional em producao) | vazio |
-| `MAX_GENERATIONS_PER_DEVICE_PER_DAY` | Limite diario por dispositivo | `5` |
-| `MAX_GLOBAL_GENERATIONS_PER_DAY` | Limite global diario | `500` |
-| `BYPASS_RATE_LIMIT_LOCAL` | Desliga rate limit em testes locais (`true`/`false`) | `false` |
-| `CRON_SECRET` | Segredo opcional `Bearer` para `/api/internal/cleanup` | opcional |
+| Chave Gemini | Credencial `Google Gemini(PaLM) Api account` no n8n | Chamada ao modelo de imagem |
+| `N8N_WEBHOOK_SECRET` | Vercel/`.env.local` **e** credencial Header Auth `HNK Arquibancada \| webhook` no n8n (header `x-internal-secret`) | So o backend consegue acionar o webhook |
+| `INTERNAL_SIGNING_SECRET` | Vercel/`.env.local` | Assina URLs de midia (HMAC com validade) e protege `/api/internal/*` |
+| `CRON_SECRET` | Vercel | Autentica o cron de limpeza 24h |
+
+Garantias automaticas:
+
+- Em producao, `INTERNAL_SIGNING_SECRET` ausente, curto (menos de 32 caracteres) ou igual ao exemplo derruba a requisicao (falha fechada).
+- O CI (`.github/workflows/ci.yml`) roda gitleaks no historico, bloqueia variavel `NEXT_PUBLIC_*` com cara de segredo e varre o bundle do navegador atras de nomes de segredo.
+- Headers de seguranca globais (`X-Frame-Options`, `Permissions-Policy` com camera so na propria origem, HSTS).
+- O workflow do n8n nao salva dados de execucao: a selfie nao fica no historico do n8n (LGPD, 24h).
+- O n8n nao baixa URLs vindas da requisicao (sem SSRF): recebe so base64 validado.
+
+Gere cada segredo com:
+
+```bash
+openssl rand -base64 48
+```
+
+As variaveis estao documentadas em `.env.example`.
 
 ---
 
@@ -122,9 +131,17 @@ O modulo `src/lib/orchestrator.ts` escolhe o pipeline automaticamente:
 
 ### n8n Cloud (`https://viniciusouza.app.n8n.cloud/workflow/g0pWpUc5qLrx0wdw`)
 
-1. Abra o workflow no editor do n8n Cloud e importe `n8n/workflow-arquibancada-ucl2027-cloud.json` (nao utiliza variaveis `$env` nem segredos fixos no JSON).
-2. Clique em **Save** e ative/publique (**Publish**) o workflow.
-3. Defina `N8N_WEBHOOK_URL=https://viniciusouza.app.n8n.cloud/webhook/arquibancada-ucl2027` no `.env.local` (ou variaveis da Vercel) junto com `GEMINI_API_KEY`.
+Fonte da verdade: `n8n/workflow-arquibancada-ucl2027-cloud.json` (8 nos, sem `$env`, sem segredos).
+
+Fluxo: `Webhook (Header Auth)` -> `Validar Payload` -> `Montar Requisicao Gemini` -> `Gemini Nano Banana` (credencial do n8n) -> `Extrair Imagem` -> resposta sincrona `{ ok, composedImageBase64, modelRefused, finishReason }`. A tipografia dos nomes e a checagem da Cadeira 1 continuam no Next.js.
+
+Para ativar:
+
+1. No n8n, crie a credencial **Header Auth** `HNK Arquibancada | webhook` com Name `x-internal-secret` e Value igual ao `N8N_WEBHOOK_SECRET`.
+2. Vincule essa credencial ao no `Webhook Arquibancada` e publique o workflow.
+3. No app: `N8N_CLOUD_WEBHOOK_URL=https://viniciusouza.app.n8n.cloud/webhook/arquibancada-ucl2027` e `N8N_WEBHOOK_SECRET=<mesmo valor>`. Deixe `GEMINI_API_KEY` vazio.
+
+A limpeza de 24h nao roda mais no n8n Cloud (ele nao alcanca `localhost`). Ela passa para o Vercel Cron em `/api/internal/cleanup` na fase de deploy.
 
 ### n8n Local Automatico (`n8n/workflow-arquibancada-ucl2027.json`)
 

@@ -87,6 +87,10 @@ export const UX_COPY = {
     consentRequiredHint:
       "Marque a autorização acima para usar sua foto na imagem.",
   },
+  seats: {
+    // Lugar vazio no SVG: fecha o conceito "guarde o lugar dos seus amigos"
+    emptyLabel: "GUARDADO",
+  },
   names: {
     stepLabel: "Passo 2 de 3",
     title: "Quem vai com você?",
@@ -154,7 +158,7 @@ export const UX_COPY = {
     generationFailed: "A arquibancada lotou. Tente de novo em instantes.",
     networkFailed: "Caiu o sinal. Confira sua internet e tente de novo.",
     rateLimited:
-      "Muitas escalações por hoje neste aparelho. Volte mais tarde para criar novas arquibancadas.",
+      "Seu time já foi escalado várias vezes hoje. Volte amanhã para montar outra arquibancada.",
     consentMissing:
       "Autorize o uso temporário da sua foto antes de continuar.",
   },

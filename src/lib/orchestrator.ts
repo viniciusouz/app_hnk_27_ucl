@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { after } from "next/server";
 import sharp from "sharp";
 import { CAMPAIGN_CONFIG } from "@/config/campaign.config";
 import {
@@ -13,7 +14,7 @@ import {
   getJobRecord,
   updateJobRecord,
 } from "./jobStore";
-import { getInternalSecret } from "./security";
+import { getInternalSecret, getN8nWebhookSecret } from "./security";
 import {
   buildSignedMediaUrl,
   readPrivateObject,
@@ -139,9 +140,10 @@ async function callNanoBananaOnce(
   }
 
   const model = process.env.NANO_BANANA_MODEL || "gemini-nano-banana-2.1";
+  // Chave vai no header: query string acaba em logs de proxy e de observabilidade
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  )}:generateContent`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -149,7 +151,7 @@ async function callNanoBananaOnce(
   try {
     const res = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       signal: controller.signal,
       body: JSON.stringify({
         contents: [
@@ -237,7 +239,8 @@ async function runN8nCloudSync(
   job: ArquibancadaJob,
   n8nUrl: string,
   selfieBuf: Buffer,
-  startedAt: number
+  startedAt: number,
+  webhookSecret: string
 ): Promise<boolean> {
   const [masterBuf, shirtRawBuf] = await Promise.all([
     fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.masterImage)),
@@ -251,9 +254,6 @@ async function runN8nCloudSync(
   const masterBase64 = masterBuf.toString("base64");
   const selfieBase64 = selfieBuf.toString("base64");
   const jerseyBase64 = shirtBuf.toString("base64");
-  const webhookSecret =
-    process.env.N8N_WEBHOOK_SECRET?.trim() || getInternalSecret();
-  const geminiKey = process.env.GEMINI_API_KEY?.trim() || "";
 
   await updateJobRecord(job.id, { status: "processing" });
 
@@ -267,8 +267,9 @@ async function runN8nCloudSync(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Unica credencial enviada: o segredo do webhook. A chave do Gemini
+          // fica guardada como credencial dentro do n8n e nunca sai de la.
           "x-internal-secret": webhookSecret,
-          "x-gemini-api-key": geminiKey,
         },
         signal: controller.signal,
         body: JSON.stringify({
@@ -340,11 +341,19 @@ async function runN8nCloudSync(
   return false;
 }
 
+/**
+ * Agenda o processamento para depois da resposta HTTP. Em serverless (Vercel),
+ * after() mantem a funcao viva ate o fim; um `void promise` solto seria
+ * congelado assim que a resposta sai.
+ */
 export function triggerJobProcessing(jobId: string, baseUrl: string): void {
   if (activeWatchdogs.has(jobId)) return;
   activeWatchdogs.add(jobId);
+  after(() => processJob(jobId, baseUrl));
+}
 
-  void (async () => {
+async function processJob(jobId: string, baseUrl: string): Promise<void> {
+  {
     const startedAt = Date.now();
     try {
       const job = await getJobRecord(jobId);
@@ -356,8 +365,16 @@ export function triggerJobProcessing(jobId: string, baseUrl: string): void {
       }
 
       // 1A. Modo n8n Cloud primeiro (se N8N_CLOUD_WEBHOOK_URL estiver configurada)
+      const n8nSecret = getN8nWebhookSecret();
       const cloudN8nUrl = process.env.N8N_CLOUD_WEBHOOK_URL?.trim();
-      if (cloudN8nUrl) {
+      if (cloudN8nUrl && !n8nSecret) {
+        await appendAnonymousLog({
+          event: "n8n_skipped",
+          jobId: job.id,
+          meta: { reason: "missing_N8N_WEBHOOK_SECRET" },
+        });
+      }
+      if (cloudN8nUrl && n8nSecret) {
         if (!selfieBuf) {
           await updateJobRecord(job.id, {
             status: "error",
@@ -369,7 +386,8 @@ export function triggerJobProcessing(jobId: string, baseUrl: string): void {
           job,
           cloudN8nUrl,
           selfieBuf,
-          startedAt
+          startedAt,
+          n8nSecret
         );
         if (handled) return;
       }
@@ -383,7 +401,7 @@ export function triggerJobProcessing(jobId: string, baseUrl: string): void {
           process.env.N8N_MODE === "sync" ||
           (!isLocalN8n && process.env.N8N_MODE !== "callback");
 
-        if (useCloudSyncMode) {
+        if (useCloudSyncMode && n8nSecret) {
           if (!selfieBuf) {
             await updateJobRecord(job.id, {
               status: "error",
@@ -395,10 +413,11 @@ export function triggerJobProcessing(jobId: string, baseUrl: string): void {
             job,
             n8nUrl,
             selfieBuf,
-            startedAt
+            startedAt,
+            n8nSecret
           );
           if (handled) return;
-        } else {
+        } else if (!useCloudSyncMode) {
           const selfieSignedUrl = `${baseUrl}${buildSignedMediaUrl(
             "read",
             job.selfiePath,
@@ -529,5 +548,5 @@ export function triggerJobProcessing(jobId: string, baseUrl: string): void {
     } finally {
       activeWatchdogs.delete(jobId);
     }
-  })();
+  }
 }

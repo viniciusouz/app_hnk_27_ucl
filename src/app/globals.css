@@ -503,3 +503,25 @@ a:focus-visible {
 .seat-animating {
   animation: seatPulseGlow 1.5s ease-in-out infinite;
 }
+
+/* Bancos SVG: o pulso usa so translate, sem sombra de caixa (nao existe em SVG) */
+svg .seat-animating {
+  animation: seatPulseSvg 1.5s ease-in-out infinite;
+}
+
+@keyframes seatPulseSvg {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seat-animating,
+  svg .seat-animating {
+    animation: none;
+  }
+}
