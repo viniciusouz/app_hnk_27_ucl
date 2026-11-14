@@ -1,0 +1,373 @@
+{
+  "name": "Arquibancada UCL 2027 | Composicao IA (cloud)",
+  "nodes": [
+    {
+      "name": "Webhook Arquibancada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "arquibancada-ucl2027",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "arquibancada-ucl2027"
+    },
+    {
+      "name": "Validar Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Valida HMAC/SHA-256 do header x-internal-secret e o corpo antes de gastar cota do Gemini ou Drive.\nconst EXPECTED_SECRET_SHA256 = '<SUBSTITUIR_PELO_SHA256_DA_N8N_WEBHOOK_SECRET>';\n\nfunction toUtf8Bytes(str) {\n  const s = String(str || '');\n  const out = [];\n  for (let i = 0; i < s.length; i++) {\n    let code = s.charCodeAt(i);\n    if (code < 0x80) {\n      out.push(code);\n    } else if (code < 0x800) {\n      out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));\n    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {\n      const next = s.charCodeAt(++i);\n      const cp = 0x10000 + (((code & 0x3ff) << 10) | (next & 0x3ff));\n      out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));\n    } else {\n      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));\n    }\n  }\n  return out;\n}\n\nfunction sha256Hex(str) {\n  const bytes = toUtf8Bytes(str);\n  const rightRotate = (v, a) => (v >>> a) | (v << (32 - a));\n  const mathPow = Math.pow;\n  const maxWord = mathPow(2, 32);\n  let result = '';\n  const words = [];\n  const asciiBitLength = bytes.length * 8;\n  const hash = [];\n  const k = [];\n  let primeCounter = 0;\n  const isComposite = {};\n  for (let candidate = 2; primeCounter < 64; candidate++) {\n    if (!isComposite[candidate]) {\n      for (let i = 0; i < 313; i += candidate) isComposite[i] = candidate;\n      hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;\n      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;\n    }\n  }\n  bytes.push(0x80);\n  while (bytes.length % 64 !== 56) bytes.push(0);\n  for (let i = 0; i < bytes.length; i++) {\n    words[i >> 2] = (words[i >> 2] || 0) | (bytes[i] << ((3 - (i % 4)) * 8));\n  }\n  words[words.length] = (asciiBitLength / maxWord) | 0;\n  words[words.length] = asciiBitLength | 0;\n  for (let j = 0; j < words.length; ) {\n    const w = words.slice(j, (j += 16));\n    const oldHash = hash.slice(0);\n    for (let i = 0; i < 64; i++) {\n      const w15 = w[i - 15], w2 = w[i - 2];\n      const a = hash[0], e = hash[4];\n      const temp1 = (hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ ((~e) & hash[6])) + k[i] + (w[i] = i < 16 ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0)) | 0;\n      const temp2 = ((rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]))) | 0;\n      hash.unshift((temp1 + temp2) | 0);\n      hash[4] = (hash[4] + temp1) | 0;\n      hash.pop();\n    }\n    for (let i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;\n  }\n  for (let i = 0; i < 8; i++) {\n    for (let j = 3; j + 1; j--) {\n      const b = (hash[i] >> (j * 8)) & 255;\n      result += (b < 16 ? '0' : '') + b.toString(16);\n    }\n  }\n  return result;\n}\n\nfunction timingSafeEq(a, b) {\n  const s1 = String(a || '');\n  const s2 = String(b || '');\n  const len = Math.max(s1.length, s2.length);\n  let diff = s1.length ^ s2.length;\n  for (let i = 0; i < len; i++) {\n    diff |= (s1.charCodeAt(i) || 0) ^ (s2.charCodeAt(i) || 0);\n  }\n  return diff === 0;\n}\n\nconst headers = $json.headers && typeof $json.headers === 'object' ? $json.headers : {};\nlet suppliedSecret = '';\nfor (const k of Object.keys(headers)) {\n  if (k.toLowerCase() === 'x-internal-secret') {\n    suppliedSecret = String(headers[k] || '').trim();\n    break;\n  }\n}\n\nif (!suppliedSecret || !timingSafeEq(sha256Hex(suppliedSecret), EXPECTED_SECRET_SHA256)) {\n  return [{\n    json: {\n      valid: false,\n      statusCode: 401,\n      action: 'unauthorized',\n      errors: ['unauthorized'],\n      errorBody: { ok: false, error: 'unauthorized' }\n    }\n  }];\n}\n\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : {};\nconst MAX_B64 = 12 * 1024 * 1024;\nconst isB64 = (s) => typeof s === 'string' && s.length > 100 && s.length < MAX_B64 && /^[A-Za-z0-9+/=]+$/.test(s.slice(0, 2000));\nconst strip = (s) => String(s || '').replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/i, '').replace(/\\s+/g, '');\n\nconst action = body.action === 'save_drive' ? 'save_drive' : 'compose';\nconst jobId = String(body.jobId || '').trim();\nconst errors = [];\n\nif (!/^[a-zA-Z0-9_-]{3,32}$/.test(jobId)) errors.push('jobId');\n\nif (action === 'save_drive') {\n  const kind = body.kind === 'selfie' ? 'selfie' : 'resultado';\n  const fileName = String(body.fileName || ('arquibancada_' + jobId + '_' + kind + '.jpg')).trim();\n  const imageBase64 = strip(body.imageBase64);\n  if (!/^[a-zA-Z0-9_.-]{3,120}\\.(jpg|jpeg|png)$/i.test(fileName) || fileName.includes('..')) errors.push('fileName');\n  if (!isB64(imageBase64)) errors.push('imageBase64');\n  const mimeType = /\\.png$/i.test(fileName) ? 'image/png' : 'image/jpeg';\n  if (errors.length > 0) {\n    return [{\n      json: {\n        valid: false,\n        statusCode: 400,\n        action,\n        errors,\n        errorBody: { ok: false, error: 'invalid_payload', fields: errors }\n      }\n    }];\n  }\n  return [{\n    json: {\n      valid: true,\n      statusCode: 200,\n      action: 'save_drive',\n      errors: [],\n      jobId,\n      fileName,\n      mimeType,\n      imageBase64,\n      startedAt: Date.now()\n    }\n  }];\n}\n\nconst names = Array.isArray(body.names) ? body.names.map((n) => String(n || '').trim()).slice(0, 3) : [];\nconst masterBase64 = strip(body.masterBase64);\nconst selfieBase64 = strip(body.selfieBase64);\nconst jerseyBase64 = strip(body.jerseyBase64);\n\nif (names.length !== 3 || names.some((n) => !n || n.length > 24)) errors.push('names');\nif (!isB64(masterBase64)) errors.push('masterBase64');\nif (!isB64(selfieBase64)) errors.push('selfieBase64');\nif (!isB64(jerseyBase64)) errors.push('jerseyBase64');\n\nif (errors.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      statusCode: 400,\n      action: 'compose',\n      errors,\n      errorBody: { ok: false, error: 'invalid_payload', fields: errors }\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    statusCode: 200,\n    action: 'compose',\n    errors: [],\n    jobId,\n    names,\n    retrySeat1: body.retrySeat1 === true,\n    masterBase64,\n    selfieBase64,\n    jerseyBase64,\n    startedAt: Date.now()\n  }\n}];"
+      }
+    },
+    {
+      "name": "Payload Valido",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "payload-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Responder 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.errorBody || { \"ok\": false, \"error\": \"invalid_payload\", \"fields\": $json.errors } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      }
+    },
+    {
+      "name": "Rota Acao",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        -240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "action-save-drive",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save_drive",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Preparar Binario Drive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -320
+      ],
+      "parameters": {
+        "jsCode": "const buf = Buffer.from($json.imageBase64, 'base64');\nconst bin = await this.helpers.prepareBinaryData(buf, $json.fileName, $json.mimeType || 'image/jpeg');\nreturn [{\n  json: {\n    jobId: $json.jobId,\n    fileName: $json.fileName,\n    bytes: buf.length,\n    startedAt: $json.startedAt\n  },\n  binary: {\n    data: bin\n  }\n}];"
+      }
+    },
+    {
+      "name": "Salvar no Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        -320
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "authentication": "oAuth2",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<DRIVE_FOLDER_ID_IMGS_GERADAS>"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "name": "Responder Drive OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        -320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": !$json.error, \"action\": \"save_drive\", \"driveFileId\": $json.id || null, \"fileName\": $json.name || $('Preparar Binario Drive').first().json.fileName, \"error\": $json.error ? ($json.error.message || 'drive_upload_failed') : null } }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "name": "Montar Requisicao Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "// Modelo fixo no servidor: o app nao escolhe modelo nem prompt.\nconst MODEL = 'gemini-nano-banana-2.1';\nconst PROMPT_B = \"EDIT: In Image 1, there are four empty glossy green stadium seats in the front row between two red edge seats. Seat one adult person ONLY in Seat 1 on the far left (the green seat immediately next to the red seat on the left border, directly in front of the cheering man in the plain white t-shirt, centered at x=17% and strictly within x=5% to x=26%). Seats 2, 3 and 4 to the right MUST stay 100% empty, uncovered and untouched.\\nSOURCE: Image 2 supplies the foreground person's exact identity only; ignore its background, other people, original clothing, lighting and framing. Image 3 supplies the green football shirt only; ignore its white background.\\nIDENTITY LOCK: Treat Image 2 as strict biometric identity evidence, not inspiration. Preserve exact gender presentation, skin tone, facial proportions, eye shape and spacing, nose, mouth, jawline, facial hair if present, hairline, full hair length, curl pattern and hair volume, apparent age and natural skin texture, with matching neck and arm skin tone. Do not beautify, lighten or darken skin tone, alter hair texture, or substitute a similar person.\\nSCALE AND POSE LOCK: Match the exact head and shoulder scale of the fans standing immediately behind the green seats so the person fits compactly inside Seat 1 alone (never oversized across two seats). Seated upright facing the camera inside Seat 1, both knees and thighs kept together strictly within Seat 1, the person's right fist (on the viewer's far left, near the left border) raised in celebration, and the person's left arm tucked close to their own torso with the left hand resting on their own left thigh inside x<=25% so no elbow, forearm or shirt crosses into Seat 2 (in front of the striped red-and-black shirt). Plain dark trousers, warm authentic open smile.\\nPRODUCT LOCK: Reproduce the green football shirt from Image 3 with its exact dark green color, vertical white lettering, starball and shield crests, and red-and-white collar and sleeve trims fitted naturally. Do not redesign or invent text.\\nPRESERVE: Camera, crop, Brazilian crowd in European club shirts behind, lighting and colors of Image 1. Seats 2, 3 and 4 on the right keep their clean glossy green backrests and red stars completely visible and unobstructed.\\nINTEGRATE: Match the cool stadium floodlight from the upper front left with realistic contact shadows on Seat 1 and natural highlights on hair, skin and jersey.\\nAVOID: Never place the person in Seat 2, 3 or 4. Never spread knees or elbows into Seat 2. No text or names added to any seat. No second person from Image 2. Nothing held in the hands.\";\nconst RETRY_PREFIX = \"CRITICAL CORRECTION: Seat the person ONLY in the 1st leftmost green chair right next to the left-edge red seat, directly in front of the white t-shirt fan. Keep the 2nd, 3rd and 4th green chairs 100% empty. \";\n\nconst prompt = ($json.retrySeat1 ? RETRY_PREFIX : '') + PROMPT_B;\n\nreturn [{\n  json: {\n    jobId: $json.jobId,\n    startedAt: $json.startedAt,\n    retrySeat1: $json.retrySeat1,\n    model: MODEL,\n    geminiBody: {\n      contents: [{\n        role: 'user',\n        parts: [\n          { text: prompt },\n          { inline_data: { mime_type: 'image/jpeg', data: $json.masterBase64 } },\n          { inline_data: { mime_type: 'image/jpeg', data: $json.selfieBase64 } },\n          { inline_data: { mime_type: 'image/png', data: $json.jerseyBase64 } }\n        ]\n      }],\n      generationConfig: {\n        responseModalities: ['IMAGE'],\n        imageConfig: { aspectRatio: '4:5', imageSize: '1K' },\n        thinkingConfig: { thinkingLevel: 'HIGH' }\n      }\n    }\n  }\n}];"
+      }
+    },
+    {
+      "name": "Gemini Nano Banana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $json.model + ':generateContent' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiBody) }}",
+        "options": {
+          "timeout": 75000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "name": "Extrair Imagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const meta = $('Montar Requisicao Gemini').first().json;\nconst candidate = $json?.candidates?.[0];\nconst finishReason = String(candidate?.finishReason || '');\nconst parts = candidate?.content?.parts || [];\nlet foundData = null;\nfor (const p of parts) {\n  const inline = p?.inlineData || p?.inline_data;\n  if (inline?.data) { foundData = inline.data; break; }\n}\nconst upstreamError = $json?.error ? String($json.error.status || $json.error.code || 'UPSTREAM_ERROR') : '';\nconst errText = JSON.stringify($json?.error || '').toLowerCase();\nconst modelRefused =\n  ['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'RECITATION'].includes(finishReason) ||\n  errText.includes('safety');\n\n// Nunca devolve o corpo bruto do Google: so o que o app precisa.\nreturn [{\n  json: {\n    ok: Boolean(foundData) && !modelRefused,\n    jobId: meta.jobId,\n    retrySeat1: Boolean(meta.retrySeat1),\n    finishReason: finishReason || upstreamError,\n    modelRefused,\n    composedImageBase64: modelRefused ? null : foundData,\n    durationMs: Math.max(0, Date.now() - Number(meta.startedAt || Date.now())),\n    model: meta.model,\n    imageSize: '1K',\n    orchestrator: 'n8n-cloud'\n  }\n}];"
+      }
+    },
+    {
+      "name": "Responder Resultado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Arquibancada": {
+      "main": [
+        [
+          {
+            "node": "Validar Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Payload": {
+      "main": [
+        [
+          {
+            "node": "Payload Valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload Valido": {
+      "main": [
+        [
+          {
+            "node": "Rota Acao",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rota Acao": {
+      "main": [
+        [
+          {
+            "node": "Preparar Binario Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar Requisicao Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Binario Drive": {
+      "main": [
+        [
+          {
+            "node": "Salvar no Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar no Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Responder Drive OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Requisicao Gemini": {
+      "main": [
+        [
+          {
+            "node": "Gemini Nano Banana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Nano Banana": {
+      "main": [
+        [
+          {
+            "node": "Extrair Imagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Imagem": {
+      "main": [
+        [
+          {
+            "node": "Responder Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "executionTimeout": 120
+  },
+  "meta": {
+    "note": "Sem $env e sem segredos em texto claro. Valida x-internal-secret via SHA-256 + timing-safe em JS puro e usa credenciais 'Google Gemini(PaLM) Api account' e 'Google Drive account'."
+  }
+}

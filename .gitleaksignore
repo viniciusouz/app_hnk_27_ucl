@@ -1,0 +1,6 @@
+# Falsos positivos revisados (regra generic-api-key).
+# AGE_STORAGE_KEY e o NOME da chave do sessionStorage que guarda a confirmacao 18+;
+# o valor "hnk_ucl27_age_18_ok" e publico e roda no navegador. Nao e credencial.
+# Use sempre fingerprint exato: nunca ignore arquivo ou regra inteira.
+2eee09a9fff7a44a39fbf8ed1725aa260323acbc:src/components/ArquibancadaFlow.tsx:generic-api-key:37
+2eee09a9fff7a44a39fbf8ed1725aa260323acbc:src/components/InviteView.tsx:generic-api-key:17
