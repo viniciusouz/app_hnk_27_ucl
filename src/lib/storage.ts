@@ -22,36 +22,34 @@ export async function ensureStorageDirs(): Promise<void> {
   await fs.mkdir(path.join(STORAGE_ROOT, "out"), { recursive: true });
 }
 
+function getBlobToken(): string | null {
+  const token = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  return token || null;
+}
+
+function normalizeBlobPath(storagePath: string): string {
+  const clean = storagePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean || clean.includes("..")) {
+    throw new Error("Invalid storage path");
+  }
+  return clean;
+}
+
 export async function savePrivateObject(
   storagePath: string,
   data: Buffer
 ): Promise<void> {
-  const blobToken = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  const blobToken = getBlobToken();
   if (blobToken) {
-    try {
-      // Dynamic import sem amarrar dependencia em build local sem @vercel/blob
-      const loadBlob = new Function("m", "return import(m)") as (
-        m: string
-      ) => Promise<{
-        put?: (
-          p: string,
-          body: Buffer,
-          opts: Record<string, unknown>
-        ) => Promise<unknown>;
-      }>;
-      const mod = await loadBlob("@vercel/blob").catch(() => null);
-      if (mod?.put) {
-        await mod.put(storagePath, data, {
-          access: "public",
-          addRandomSuffix: false,
-          contentType: "image/jpeg",
-          token: blobToken,
-        });
-        return;
-      }
-    } catch {
-      // Fallback automatico para storage local caso o SDK do Blob nao esteja presente
-    }
+    const { put } = await import("@vercel/blob");
+    await put(normalizeBlobPath(storagePath), data, {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "image/jpeg",
+      token: blobToken,
+    });
+    return;
   }
   await ensureStorageDirs();
   const abs = resolveSafePath(storagePath);
@@ -61,6 +59,24 @@ export async function savePrivateObject(
 export async function readPrivateObject(
   storagePath: string
 ): Promise<Buffer | null> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    try {
+      const { get } = await import("@vercel/blob");
+      const res = await get(normalizeBlobPath(storagePath), {
+        access: "private",
+        useCache: false,
+        token: blobToken,
+      });
+      if (!res || res.statusCode !== 200 || !res.stream) {
+        return null;
+      }
+      const ab = await new Response(res.stream).arrayBuffer();
+      return Buffer.from(ab);
+    } catch {
+      return null;
+    }
+  }
   try {
     const abs = resolveSafePath(storagePath);
     return await fs.readFile(abs);
@@ -70,6 +86,16 @@ export async function readPrivateObject(
 }
 
 export async function deletePrivateObject(storagePath: string): Promise<void> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    try {
+      const { del } = await import("@vercel/blob");
+      await del(normalizeBlobPath(storagePath), { token: blobToken });
+    } catch {
+      // Objeto ja removido ou ausente
+    }
+    return;
+  }
   try {
     const abs = resolveSafePath(storagePath);
     await fs.unlink(abs);

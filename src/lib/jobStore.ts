@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { CAMPAIGN_CONFIG } from "@/config/campaign.config";
 import { deletePrivateObject } from "./storage";
@@ -32,26 +33,151 @@ export interface ArquibancadaJob {
   expiresAt: string;
 }
 
-const DATA_ROOT = path.join(process.cwd(), ".data");
+const DATA_ROOT = process.env.VERCEL
+  ? path.join(os.tmpdir(), "arquibancada-data")
+  : path.join(process.cwd(), ".data");
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const LOGS_DIR = path.join(DATA_ROOT, "logs");
+
+function getBlobToken(): string | null {
+  const token = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+  return token || null;
+}
 
 async function ensureDirs(): Promise<void> {
   await fs.mkdir(JOBS_DIR, { recursive: true });
   await fs.mkdir(LOGS_DIR, { recursive: true });
 }
 
-function jobFilePath(id: string): string {
+function validateJobId(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "");
   if (!safeId || safeId !== id) {
     throw new Error("Invalid job id");
   }
-  return path.join(JOBS_DIR, `${safeId}.json`);
+  return safeId;
+}
+
+function jobFilePath(id: string): string {
+  return path.join(JOBS_DIR, `${validateJobId(id)}.json`);
+}
+
+function jobBlobPath(id: string): string {
+  return `jobs/${validateJobId(id)}.json`;
+}
+
+function rateLimitPrefix(dayKey: string, deviceHash?: string): string {
+  if (!deviceHash) {
+    return `ratelimit/${dayKey}/`;
+  }
+  const safeHash =
+    deviceHash.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) || "anon";
+  return `ratelimit/${dayKey}/${safeHash}/`;
+}
+
+async function readBlobJobRaw(
+  pathname: string,
+  blobToken: string
+): Promise<ArquibancadaJob | null> {
+  try {
+    const { get } = await import("@vercel/blob");
+    const res = await get(pathname, {
+      access: "private",
+      useCache: false,
+      token: blobToken,
+    });
+    if (!res || res.statusCode !== 200 || !res.stream) {
+      return null;
+    }
+    const raw = await new Response(res.stream).text();
+    return JSON.parse(raw) as ArquibancadaJob;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBlobJob(
+  job: ArquibancadaJob,
+  blobToken: string
+): Promise<void> {
+  const { put } = await import("@vercel/blob");
+  await put(jobBlobPath(job.id), JSON.stringify(job, null, 2), {
+    access: "private",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: "application/json",
+    token: blobToken,
+  });
+}
+
+async function listAllBlobs(prefix: string, blobToken: string) {
+  const { list } = await import("@vercel/blob");
+  const all: Array<{ pathname: string; uploadedAt: Date }> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: 1000, token: blobToken });
+    for (const b of page.blobs) {
+      all.push({ pathname: b.pathname, uploadedAt: b.uploadedAt });
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return all;
+}
+
+async function countBlobsUpTo(
+  prefix: string,
+  cap: number,
+  blobToken: string
+): Promise<number> {
+  const { list } = await import("@vercel/blob");
+  let count = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await list({
+      prefix,
+      cursor,
+      limit: Math.min(1000, Math.max(10, cap)),
+      token: blobToken,
+    });
+    count += page.blobs.length;
+    if (count >= cap) return count;
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return count;
+}
+
+async function deleteBlobBatches(
+  pathnames: string[],
+  blobToken: string
+): Promise<void> {
+  if (pathnames.length === 0) return;
+  const { del } = await import("@vercel/blob");
+  for (let i = 0; i < pathnames.length; i += 100) {
+    const batch = pathnames.slice(i, i + 100);
+    await del(batch, { token: blobToken }).catch(() => undefined);
+  }
 }
 
 export async function createJobRecord(
   job: ArquibancadaJob
 ): Promise<ArquibancadaJob> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    const { put } = await import("@vercel/blob");
+    const dayKey = (job.createdAt || new Date().toISOString()).slice(0, 10);
+    const markerPath = `${rateLimitPrefix(dayKey, job.deviceHash || "anon")}${validateJobId(job.id)}.txt`;
+    await Promise.all([
+      writeBlobJob(job, blobToken),
+      put(markerPath, "1", {
+        access: "private",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        contentType: "text/plain",
+        token: blobToken,
+      }),
+    ]);
+    return job;
+  }
+
   await ensureDirs();
   await fs.writeFile(jobFilePath(job.id), JSON.stringify(job, null, 2), "utf8");
   return job;
@@ -60,6 +186,23 @@ export async function createJobRecord(
 export async function getJobRecord(
   id: string
 ): Promise<ArquibancadaJob | null> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    let pathname: string;
+    try {
+      pathname = jobBlobPath(id);
+    } catch {
+      return null;
+    }
+    const parsed = await readBlobJobRaw(pathname, blobToken);
+    if (!parsed) return null;
+    if (Date.parse(parsed.expiresAt) <= Date.now()) {
+      await expireSingleJob(parsed);
+      return null;
+    }
+    return parsed;
+  }
+
   try {
     const raw = await fs.readFile(jobFilePath(id), "utf8");
     const parsed = JSON.parse(raw) as ArquibancadaJob;
@@ -74,6 +217,17 @@ export async function getJobRecord(
 }
 
 export async function isJobExpired(id: string): Promise<boolean> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    try {
+      const parsed = await readBlobJobRaw(jobBlobPath(id), blobToken);
+      if (!parsed) return false;
+      return Date.parse(parsed.expiresAt) <= Date.now();
+    } catch {
+      return false;
+    }
+  }
+
   try {
     const raw = await fs.readFile(jobFilePath(id), "utf8");
     const parsed = JSON.parse(raw) as ArquibancadaJob;
@@ -94,6 +248,11 @@ export async function updateJobRecord(
     ...patch,
     id: current.id,
   };
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    await writeBlobJob(updated, blobToken);
+    return updated;
+  }
   await fs.writeFile(jobFilePath(id), JSON.stringify(updated, null, 2), "utf8");
   return updated;
 }
@@ -103,6 +262,16 @@ async function expireSingleJob(job: ArquibancadaJob): Promise<void> {
   if (job.imagePath) {
     await deletePrivateObject(job.imagePath);
   }
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    try {
+      const { del } = await import("@vercel/blob");
+      await del(jobBlobPath(job.id), { token: blobToken });
+    } catch {
+      // Registro ja removido
+    }
+    return;
+  }
   try {
     await fs.unlink(jobFilePath(job.id));
   } catch {
@@ -111,6 +280,17 @@ async function expireSingleJob(job: ArquibancadaJob): Promise<void> {
 }
 
 export async function deleteJobRecord(id: string): Promise<void> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    try {
+      const job = await readBlobJobRaw(jobBlobPath(id), blobToken);
+      if (job) await expireSingleJob(job);
+    } catch {
+      // Registro ausente
+    }
+    return;
+  }
+
   try {
     const raw = await fs.readFile(jobFilePath(id), "utf8");
     const job = JSON.parse(raw) as ArquibancadaJob;
@@ -123,6 +303,69 @@ export async function deleteJobRecord(id: string): Promise<void> {
 export async function cleanupExpiredJobs(): Promise<{
   removedCount: number;
 }> {
+  const blobToken = getBlobToken();
+  if (blobToken) {
+    const now = Date.now();
+    const ttlMs = CAMPAIGN_CONFIG.limits.jobTtlHours * 60 * 60 * 1000;
+    const todayUtc = new Date(now).toISOString().slice(0, 10);
+    let removedCount = 0;
+    const expiredMedia = new Set<string>();
+
+    const jobBlobs = await listAllBlobs("jobs/", blobToken);
+    for (let i = 0; i < jobBlobs.length; i += 10) {
+      const chunk = jobBlobs.slice(i, i + 10);
+      await Promise.all(
+        chunk.map(async (b) => {
+          const job = await readBlobJobRaw(b.pathname, blobToken);
+          if (job && Date.parse(job.expiresAt) <= now) {
+            expiredMedia.add(job.selfiePath);
+            if (job.imagePath) expiredMedia.add(job.imagePath);
+            await expireSingleJob(job);
+            removedCount++;
+          } else if (!job && now - b.uploadedAt.getTime() >= ttlMs) {
+            await deleteBlobBatches([b.pathname], blobToken);
+            removedCount++;
+          }
+        })
+      );
+    }
+
+    const [inBlobs, outBlobs, rateBlobs] = await Promise.all([
+      listAllBlobs("in/", blobToken),
+      listAllBlobs("out/", blobToken),
+      listAllBlobs("ratelimit/", blobToken),
+    ]);
+
+    const orphanIn = inBlobs
+      .filter(
+        (b) =>
+          !expiredMedia.has(b.pathname) &&
+          now - b.uploadedAt.getTime() >= ttlMs
+      )
+      .map((b) => b.pathname);
+    const orphanOut = outBlobs
+      .filter(
+        (b) =>
+          !expiredMedia.has(b.pathname) &&
+          now - b.uploadedAt.getTime() >= ttlMs
+      )
+      .map((b) => b.pathname);
+    const staleRate = rateBlobs
+      .filter((b) => {
+        const m = /^ratelimit\/(\d{4}-\d{2}-\d{2})\//.exec(b.pathname);
+        return Boolean(m && m[1] < todayUtc);
+      })
+      .map((b) => b.pathname);
+
+    removedCount += orphanIn.length;
+    await deleteBlobBatches(
+      [...orphanIn, ...orphanOut, ...staleRate],
+      blobToken
+    );
+
+    return { removedCount };
+  }
+
   await ensureDirs();
   let removedCount = 0;
   const files = await fs.readdir(JOBS_DIR).catch(() => []);
@@ -152,8 +395,32 @@ export async function checkAndConsumeRateLimit(
     return { allowed: true };
   }
 
-  await ensureDirs();
+  const blobToken = getBlobToken();
   const dayKey = new Date().toISOString().slice(0, 10);
+
+  if (blobToken) {
+    const [globalToday, deviceToday] = await Promise.all([
+      countBlobsUpTo(
+        rateLimitPrefix(dayKey),
+        CAMPAIGN_CONFIG.limits.maxGlobalPerDay,
+        blobToken
+      ),
+      countBlobsUpTo(
+        rateLimitPrefix(dayKey, deviceHash),
+        CAMPAIGN_CONFIG.limits.maxPerDevicePerDay,
+        blobToken
+      ),
+    ]);
+    if (globalToday >= CAMPAIGN_CONFIG.limits.maxGlobalPerDay) {
+      return { allowed: false, reason: "global" };
+    }
+    if (deviceToday >= CAMPAIGN_CONFIG.limits.maxPerDevicePerDay) {
+      return { allowed: false, reason: "device" };
+    }
+    return { allowed: true };
+  }
+
+  await ensureDirs();
   const files = await fs.readdir(JOBS_DIR).catch(() => []);
 
   let globalToday = 0;
@@ -192,13 +459,19 @@ export async function appendAnonymousLog(entry: {
   errorCode?: string | null;
   meta?: Record<string, string | number | boolean>;
 }): Promise<void> {
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    ...entry,
+  });
+
+  if (getBlobToken() || process.env.VERCEL === "1") {
+    console.info(line);
+    return;
+  }
+
   try {
     await ensureDirs();
     const dayKey = new Date().toISOString().slice(0, 10);
-    const line = JSON.stringify({
-      ts: new Date().toISOString(),
-      ...entry,
-    });
     await fs.appendFile(
       path.join(LOGS_DIR, `events-${dayKey}.jsonl`),
       line + "\n",

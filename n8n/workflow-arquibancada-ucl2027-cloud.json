@@ -12,16 +12,11 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "arquibancada-ucl2027",
-        "authentication": "headerAuth",
+        "authentication": "none",
         "responseMode": "responseNode",
         "options": {}
       },
-      "webhookId": "arquibancada-ucl2027",
-      "credentials": {
-        "httpHeaderAuth": {
-          "name": "HNK Arquibancada | webhook"
-        }
-      }
+      "webhookId": "arquibancada-ucl2027"
     },
     {
       "name": "Validar Payload",
@@ -32,7 +27,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Valida o corpo antes de gastar cota do Gemini. Sem download de URLs: evita SSRF.\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : {};\nconst MAX_B64 = 12 * 1024 * 1024; // ~9 MB binario por imagem\nconst isB64 = (s) => typeof s === 'string' && s.length > 100 && s.length < MAX_B64 && /^[A-Za-z0-9+/=\\r\\n]+$/.test(s.slice(0, 2000));\nconst strip = (s) => String(s || '').replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/i, '').trim();\n\nconst jobId = String(body.jobId || '').trim();\nconst names = Array.isArray(body.names) ? body.names.map((n) => String(n || '').trim()).slice(0, 3) : [];\nconst masterBase64 = strip(body.masterBase64);\nconst selfieBase64 = strip(body.selfieBase64);\nconst jerseyBase64 = strip(body.jerseyBase64);\n\nconst errors = [];\nif (!/^[a-zA-Z0-9_-]{3,32}$/.test(jobId)) errors.push('jobId');\nif (names.length !== 3 || names.some((n) => !n || n.length > 24)) errors.push('names');\nif (!isB64(masterBase64)) errors.push('masterBase64');\nif (!isB64(selfieBase64)) errors.push('selfieBase64');\nif (!isB64(jerseyBase64)) errors.push('jerseyBase64');\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    jobId,\n    names,\n    retrySeat1: body.retrySeat1 === true,\n    masterBase64,\n    selfieBase64,\n    jerseyBase64,\n    startedAt: Date.now()\n  }\n}];"
+        "jsCode": "// Valida HMAC/SHA-256 do header x-internal-secret e o corpo antes de gastar cota do Gemini ou Drive.\nconst EXPECTED_SECRET_SHA256 = '<SUBSTITUIR_PELO_SHA256_DA_N8N_WEBHOOK_SECRET>';\n\nfunction toUtf8Bytes(str) {\n  const s = String(str || '');\n  const out = [];\n  for (let i = 0; i < s.length; i++) {\n    let code = s.charCodeAt(i);\n    if (code < 0x80) {\n      out.push(code);\n    } else if (code < 0x800) {\n      out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));\n    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {\n      const next = s.charCodeAt(++i);\n      const cp = 0x10000 + (((code & 0x3ff) << 10) | (next & 0x3ff));\n      out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));\n    } else {\n      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));\n    }\n  }\n  return out;\n}\n\nfunction sha256Hex(str) {\n  const bytes = toUtf8Bytes(str);\n  const rightRotate = (v, a) => (v >>> a) | (v << (32 - a));\n  const mathPow = Math.pow;\n  const maxWord = mathPow(2, 32);\n  let result = '';\n  const words = [];\n  const asciiBitLength = bytes.length * 8;\n  const hash = [];\n  const k = [];\n  let primeCounter = 0;\n  const isComposite = {};\n  for (let candidate = 2; primeCounter < 64; candidate++) {\n    if (!isComposite[candidate]) {\n      for (let i = 0; i < 313; i += candidate) isComposite[i] = candidate;\n      hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;\n      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;\n    }\n  }\n  bytes.push(0x80);\n  while (bytes.length % 64 !== 56) bytes.push(0);\n  for (let i = 0; i < bytes.length; i++) {\n    words[i >> 2] = (words[i >> 2] || 0) | (bytes[i] << ((3 - (i % 4)) * 8));\n  }\n  words[words.length] = (asciiBitLength / maxWord) | 0;\n  words[words.length] = asciiBitLength | 0;\n  for (let j = 0; j < words.length; ) {\n    const w = words.slice(j, (j += 16));\n    const oldHash = hash.slice(0);\n    for (let i = 0; i < 64; i++) {\n      const w15 = w[i - 15], w2 = w[i - 2];\n      const a = hash[0], e = hash[4];\n      const temp1 = (hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ ((~e) & hash[6])) + k[i] + (w[i] = i < 16 ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0)) | 0;\n      const temp2 = ((rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]))) | 0;\n      hash.unshift((temp1 + temp2) | 0);\n      hash[4] = (hash[4] + temp1) | 0;\n      hash.pop();\n    }\n    for (let i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;\n  }\n  for (let i = 0; i < 8; i++) {\n    for (let j = 3; j + 1; j--) {\n      const b = (hash[i] >> (j * 8)) & 255;\n      result += (b < 16 ? '0' : '') + b.toString(16);\n    }\n  }\n  return result;\n}\n\nfunction timingSafeEq(a, b) {\n  const s1 = String(a || '');\n  const s2 = String(b || '');\n  const len = Math.max(s1.length, s2.length);\n  let diff = s1.length ^ s2.length;\n  for (let i = 0; i < len; i++) {\n    diff |= (s1.charCodeAt(i) || 0) ^ (s2.charCodeAt(i) || 0);\n  }\n  return diff === 0;\n}\n\nconst headers = $json.headers && typeof $json.headers === 'object' ? $json.headers : {};\nlet suppliedSecret = '';\nfor (const k of Object.keys(headers)) {\n  if (k.toLowerCase() === 'x-internal-secret') {\n    suppliedSecret = String(headers[k] || '').trim();\n    break;\n  }\n}\n\nif (!suppliedSecret || !timingSafeEq(sha256Hex(suppliedSecret), EXPECTED_SECRET_SHA256)) {\n  return [{\n    json: {\n      valid: false,\n      statusCode: 401,\n      action: 'unauthorized',\n      errors: ['unauthorized'],\n      errorBody: { ok: false, error: 'unauthorized' }\n    }\n  }];\n}\n\nconst body = $json.body && typeof $json.body === 'object' ? $json.body : {};\nconst MAX_B64 = 12 * 1024 * 1024;\nconst isB64 = (s) => typeof s === 'string' && s.length > 100 && s.length < MAX_B64 && /^[A-Za-z0-9+/=]+$/.test(s.slice(0, 2000));\nconst strip = (s) => String(s || '').replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/i, '').replace(/\\s+/g, '');\n\nconst action = body.action === 'save_drive' ? 'save_drive' : 'compose';\nconst jobId = String(body.jobId || '').trim();\nconst errors = [];\n\nif (!/^[a-zA-Z0-9_-]{3,32}$/.test(jobId)) errors.push('jobId');\n\nif (action === 'save_drive') {\n  const kind = body.kind === 'selfie' ? 'selfie' : 'resultado';\n  const fileName = String(body.fileName || ('arquibancada_' + jobId + '_' + kind + '.jpg')).trim();\n  const imageBase64 = strip(body.imageBase64);\n  if (!/^[a-zA-Z0-9_.-]{3,120}\\.(jpg|jpeg|png)$/i.test(fileName) || fileName.includes('..')) errors.push('fileName');\n  if (!isB64(imageBase64)) errors.push('imageBase64');\n  const mimeType = /\\.png$/i.test(fileName) ? 'image/png' : 'image/jpeg';\n  if (errors.length > 0) {\n    return [{\n      json: {\n        valid: false,\n        statusCode: 400,\n        action,\n        errors,\n        errorBody: { ok: false, error: 'invalid_payload', fields: errors }\n      }\n    }];\n  }\n  return [{\n    json: {\n      valid: true,\n      statusCode: 200,\n      action: 'save_drive',\n      errors: [],\n      jobId,\n      fileName,\n      mimeType,\n      imageBase64,\n      startedAt: Date.now()\n    }\n  }];\n}\n\nconst names = Array.isArray(body.names) ? body.names.map((n) => String(n || '').trim()).slice(0, 3) : [];\nconst masterBase64 = strip(body.masterBase64);\nconst selfieBase64 = strip(body.selfieBase64);\nconst jerseyBase64 = strip(body.jerseyBase64);\n\nif (names.length !== 3 || names.some((n) => !n || n.length > 24)) errors.push('names');\nif (!isB64(masterBase64)) errors.push('masterBase64');\nif (!isB64(selfieBase64)) errors.push('selfieBase64');\nif (!isB64(jerseyBase64)) errors.push('jerseyBase64');\n\nif (errors.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      statusCode: 400,\n      action: 'compose',\n      errors,\n      errorBody: { ok: false, error: 'invalid_payload', fields: errors }\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    statusCode: 200,\n    action: 'compose',\n    errors: [],\n    jobId,\n    names,\n    retrySeat1: body.retrySeat1 === true,\n    masterBase64,\n    selfieBase64,\n    jerseyBase64,\n    startedAt: Date.now()\n  }\n}];"
       }
     },
     {
@@ -78,9 +73,103 @@
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { \"ok\": false, \"error\": \"invalid_payload\", \"fields\": $json.errors } }}",
+        "responseBody": "={{ $json.errorBody || { \"ok\": false, \"error\": \"invalid_payload\", \"fields\": $json.errors } }}",
         "options": {
-          "responseCode": 400
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      }
+    },
+    {
+      "name": "Rota Acao",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        -240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "action-save-drive",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save_drive",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Preparar Binario Drive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -320
+      ],
+      "parameters": {
+        "jsCode": "const buf = Buffer.from($json.imageBase64, 'base64');\nconst bin = await this.helpers.prepareBinaryData(buf, $json.fileName, $json.mimeType || 'image/jpeg');\nreturn [{\n  json: {\n    jobId: $json.jobId,\n    fileName: $json.fileName,\n    bytes: buf.length,\n    startedAt: $json.startedAt\n  },\n  binary: {\n    data: bin\n  }\n}];"
+      }
+    },
+    {
+      "name": "Salvar no Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        -320
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "authentication": "oAuth2",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<DRIVE_FOLDER_ID_IMGS_GERADAS>"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "name": "Responder Drive OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        -320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": !$json.error, \"action\": \"save_drive\", \"driveFileId\": $json.id || null, \"fileName\": $json.name || $('Preparar Binario Drive').first().json.fileName, \"error\": $json.error ? ($json.error.message || 'drive_upload_failed') : null } }}",
+        "options": {
+          "responseCode": 200
         }
       }
     },
@@ -123,7 +212,6 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "AAAq0ztNYxjK3Tbd",
           "name": "Google Gemini(PaLM) Api account"
         }
       }
@@ -184,7 +272,7 @@
       "main": [
         [
           {
-            "node": "Montar Requisicao Gemini",
+            "node": "Rota Acao",
             "type": "main",
             "index": 0
           }
@@ -192,6 +280,46 @@
         [
           {
             "node": "Responder 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rota Acao": {
+      "main": [
+        [
+          {
+            "node": "Preparar Binario Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar Requisicao Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Binario Drive": {
+      "main": [
+        [
+          {
+            "node": "Salvar no Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar no Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Responder Drive OK",
             "type": "main",
             "index": 0
           }
@@ -240,6 +368,6 @@
     "executionTimeout": 120
   },
   "meta": {
-    "note": "Sem $env e sem segredos. Credenciais: 'HNK Arquibancada | webhook' (Header Auth, header x-internal-secret) e 'Google Gemini(PaLM) Api account'."
+    "note": "Sem $env e sem segredos em texto claro. Valida x-internal-secret via SHA-256 + timing-safe em JS puro e usa credenciais 'Google Gemini(PaLM) Api account' e 'Google Drive account'."
   }
 }

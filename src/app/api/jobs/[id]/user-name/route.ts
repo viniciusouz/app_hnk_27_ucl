@@ -1,5 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { mirrorToDriveOutput } from "@/lib/driveSync";
 import { NextRequest, NextResponse } from "next/server";
 import { composeArquibancadaImage } from "@/lib/composer";
 import { getJobRecord, updateJobRecord } from "@/lib/jobStore";
@@ -47,17 +46,7 @@ export async function POST(
     const outPath = job.imagePath || `out/${job.id}.jpg`;
     await savePrivateObject(outPath, recomposed);
     updatedPath = outPath;
-
-    const driveOutDir = process.env.DRIVE_OUTPUT_DIR?.trim();
-    if (driveOutDir) {
-      await fs.mkdir(driveOutDir, { recursive: true }).catch(() => undefined);
-      await fs
-        .writeFile(
-          path.join(driveOutDir, `arquibancada_${job.id}_resultado.jpg`),
-          recomposed
-        )
-        .catch(() => undefined);
-    }
+    await mirrorToDriveOutput(job.id, "resultado", recomposed);
   }
 
   const updated = await updateJobRecord(job.id, {

@@ -6,15 +6,15 @@ import {
 import { appendAnonymousLog, cleanupExpiredJobs } from "@/lib/jobStore";
 import { timingSafeCompare } from "@/lib/security";
 
-export async function POST(req: NextRequest): Promise<NextResponse> {
+async function handleCleanup(req: NextRequest): Promise<NextResponse> {
   const cronSecret = process.env.CRON_SECRET?.trim();
   const authHeader = req.headers.get("authorization") || "";
   const isCronAuthorized =
     Boolean(cronSecret) &&
     authHeader.startsWith("Bearer ") &&
-    timingSafeCompare(authHeader.slice(7), cronSecret!);
+    timingSafeCompare(authHeader.slice(7).trim(), cronSecret!);
 
-  if (!isAuthorizedInternalRequest(req) && !isCronAuthorized) {
+  if (!isCronAuthorized && !isAuthorizedInternalRequest(req)) {
     return unauthorizedResponse();
   }
 
@@ -28,4 +28,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ok: true,
     removedCount: result.removedCount,
   });
+}
+
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  return handleCleanup(req);
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  return handleCleanup(req);
 }
