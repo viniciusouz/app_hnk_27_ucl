@@ -7,6 +7,13 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: ["sharp"],
   outputFileTracingRoot: path.resolve(__dirname),
+  outputFileTracingIncludes: {
+    "/api/**": [
+      "./public/pipeline/**/*",
+      "./public/brand/**/*",
+      "./public/fonts/**/*",
+    ],
+  },
   poweredByHeader: false,
   async headers() {
     return [

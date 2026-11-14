@@ -1,3 +1,4 @@
+import "./fontconfigInit";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { after } from "next/server";
@@ -242,20 +243,20 @@ async function runN8nCloudSync(
   startedAt: number,
   webhookSecret: string
 ): Promise<boolean> {
+  await updateJobRecord(job.id, { status: "processing" });
+
   const [masterBuf, shirtRawBuf] = await Promise.all([
-    fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.masterImage)),
-    fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.jerseyImage)),
+    fs.readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.masterImage)),
+    fs.readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.jerseyImage)),
   ]);
   const shirtBuf = await sharp(shirtRawBuf)
-    .resize({ width: 1024, withoutEnlargement: true })
+    .resize({ width: 768, withoutEnlargement: true })
     .png({ compressionLevel: 8 })
     .toBuffer();
 
   const masterBase64 = masterBuf.toString("base64");
   const selfieBase64 = selfieBuf.toString("base64");
   const jerseyBase64 = shirtBuf.toString("base64");
-
-  await updateJobRecord(job.id, { status: "processing" });
 
   let evaluatedAiImage = false;
 
@@ -288,6 +289,7 @@ async function runN8nCloudSync(
         composedImageBase64?: string;
         modelRefused?: boolean;
         finishReason?: string;
+        error?: string;
       } | null;
 
       if (json?.modelRefused === true) {
@@ -323,11 +325,29 @@ async function runN8nCloudSync(
         continue;
       }
 
+      await appendAnonymousLog({
+        event: "n8n_attempt_failed",
+        jobId: job.id,
+        meta: {
+          attempt,
+          httpStatus: res.status,
+          finishReason: String(json?.finishReason || ""),
+          error: String(json?.error || "").slice(0, 120),
+        },
+      }).catch(() => undefined);
+
       if (res.status === 401 || res.status === 404) {
         break;
       }
-    } catch {
-      // Unreachable or aborted; fall through when no AI image was evaluated
+    } catch (err) {
+      await appendAnonymousLog({
+        event: "n8n_attempt_failed",
+        jobId: job.id,
+        meta: {
+          attempt,
+          error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
+        },
+      }).catch(() => undefined);
     } finally {
       clearTimeout(timer);
     }
@@ -467,8 +487,8 @@ async function processJob(jobId: string, baseUrl: string): Promise<void> {
       if (process.env.GEMINI_API_KEY?.trim()) {
         await updateJobRecord(job.id, { status: "processing" });
         const [masterBuf, shirtBuf] = await Promise.all([
-          fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.masterImage)),
-          fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.jerseyImage)),
+          fs.readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.masterImage)),
+          fs.readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.jerseyImage)),
         ]);
 
         if (!selfieBuf) {
@@ -543,8 +563,30 @@ async function processJob(jobId: string, baseUrl: string): Promise<void> {
       await updateJobRecord(job.id, { status: "processing" });
       await sleep(2500);
       await runFallbackPipeline(job.id, "local_demo_mode");
-    } catch {
-      await runFallbackPipeline(jobId, "unexpected_error").catch(() => undefined);
+    } catch (err) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      console.error("[orchestrator] processJob failed:", jobId, errMessage);
+      await appendAnonymousLog({
+        event: "job_unexpected_error",
+        jobId,
+        errorCode: "unexpected_error",
+        meta: { message: errMessage.slice(0, 180) },
+      }).catch(() => undefined);
+
+      try {
+        await runFallbackPipeline(jobId, "unexpected_error");
+      } catch (fallbackErr) {
+        const fbMessage =
+          fallbackErr instanceof Error
+            ? fallbackErr.message
+            : String(fallbackErr);
+        console.error("[orchestrator] fallback failed:", jobId, fbMessage);
+        await updateJobRecord(jobId, {
+          status: "error",
+          errorCode: "timeout",
+          durationMs: Date.now() - startedAt,
+        }).catch(() => undefined);
+      }
     } finally {
       activeWatchdogs.delete(jobId);
     }

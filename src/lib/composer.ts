@@ -1,3 +1,4 @@
+import "./fontconfigInit";
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
@@ -23,7 +24,7 @@ async function getMasterRawRgb(): Promise<Buffer> {
   if (!cachedMasterRgb) {
     const { width, height } = SEATS_LAYOUT_CONFIG;
     cachedMasterRgb = fs
-      .readFile(path.resolve(CAMPAIGN_CONFIG.assets.masterImage))
+      .readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.masterImage))
       .then((buf) =>
         sharp(buf)
           .resize(width, height, { fit: "cover", position: "center" })
@@ -264,12 +265,12 @@ export async function composeArquibancadaImage(
 ): Promise<Buffer> {
   const { width, height, seats } = SEATS_LAYOUT_CONFIG;
 
-  const serifBoldFile = path.resolve("public/fonts/HeinekenSerif18-Bold.ttf");
-  const sansRegularFile = path.resolve("public/fonts/HeinekenSans-Regular.ttf");
+  const serifBoldFile = path.join(process.cwd(), "public/fonts/HeinekenSerif18-Bold.ttf");
+  const sansRegularFile = path.join(process.cwd(), "public/fonts/HeinekenSans-Regular.ttf");
 
   const baseSource =
     opts.baseImageBuffer ??
-    (await fs.readFile(path.resolve(CAMPAIGN_CONFIG.assets.fallbackImage)));
+    (await fs.readFile(path.join(process.cwd(), CAMPAIGN_CONFIG.assets.fallbackImage)));
 
   const normalizedBase = await sharp(baseSource)
     .resize(width, height, { fit: "cover", position: "center" })
@@ -311,7 +312,7 @@ export async function composeArquibancadaImage(
 
   // 2. Logotipo oficial Heineken horizontal sobre fundo verde
   const logoSvgRaw = await fs.readFile(
-    path.resolve(CAMPAIGN_CONFIG.assets.logoExtHorizOnGreen)
+    path.join(process.cwd(), CAMPAIGN_CONFIG.assets.logoExtHorizOnGreen)
   );
   const logoPng = await sharp(logoSvgRaw, { density: 260 })
     .resize({ width: 230, height: 64, fit: "inside" })
