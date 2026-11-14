@@ -1,0 +1,915 @@
+{
+  "id": "arquibancadaUCL27",
+  "name": "Arquibancada UCL 2027 - Heineken Composicao e Limpeza",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "arquibancada-ucl2027",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-arquibancada",
+      "name": "Webhook Arquibancada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "arquibancada-ucl2027"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-internal-secret",
+              "leftValue": "={{ $json.headers['x-internal-secret'] || $json.headers['X-Internal-Secret'] || '' }}",
+              "rightValue": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-validar-secret",
+      "name": "Validar Secret Interno",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"Unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "node-responder-401",
+      "name": "Responder 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": true, \"jobId\": $json.body.jobId } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "node-responder-202",
+      "name": "Responder 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.jobPatchUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"status\": \"processing\" } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node-marcar-processing",
+      "name": "Marcar Status Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.masterUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "master"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "node-download-master",
+      "name": "Download Master 4x5",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.selfieSignedUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "selfie"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "node-download-selfie",
+      "name": "Download Selfie Assinada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 140],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-drive-dir-selfie",
+              "leftValue": "={{ $env.DRIVE_OUTPUT_DIR || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-drive-selfie",
+      "name": "Drive Ativo Selfie",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1640, -140]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $env.DRIVE_OUTPUT_DIR + '/arquibancada_' + $('Webhook Arquibancada').first().json.body.jobId + '_selfie.jpg' }}",
+        "dataPropertyName": "selfie",
+        "options": {}
+      },
+      "id": "node-salvar-selfie-drive",
+      "name": "Salvar Selfie no Drive",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [1880, -140],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.jerseyUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "jersey"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "node-download-camisa",
+      "name": "Download Camisa Oficial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 80],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhookBody = $('Webhook Arquibancada').first().json.body;\nconst startedAt = Date.now();\nconst ts = new Date(startedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19);\n\nconst masterBuffer = await this.helpers.getBinaryDataBuffer(0, 'master');\nconst selfieBuffer = await this.helpers.getBinaryDataBuffer(0, 'selfie');\nconst jerseyBuffer = await this.helpers.getBinaryDataBuffer(0, 'jersey');\n\nconst masterMime = $binary?.master?.mimeType || 'image/jpeg';\nconst selfieMime = $binary?.selfie?.mimeType || 'image/jpeg';\nconst jerseyMime = $binary?.jersey?.mimeType || 'image/png';\n\nconst promptB = [\n  \"EDIT: In Image 1, there are four empty glossy green stadium seats in the front row between two red edge seats. Seat one adult person ONLY in Seat 1 on the far left (the green seat immediately next to the red seat on the left border, directly in front of the cheering man in the plain white t-shirt, centered at x=17% and strictly within x=5% to x=26%). Seats 2, 3 and 4 to the right MUST stay 100% empty, uncovered and untouched.\",\n  \"SOURCE: Image 2 supplies the foreground person's exact identity only; ignore its background, other people, original clothing, lighting and framing. Image 3 supplies the green football shirt only; ignore its white background.\",\n  \"IDENTITY LOCK: Treat Image 2 as strict biometric identity evidence, not inspiration. Preserve exact gender presentation, skin tone, facial proportions, eye shape and spacing, nose, mouth, jawline, facial hair if present, hairline, full hair length, curl pattern and hair volume, apparent age and natural skin texture, with matching neck and arm skin tone. Do not beautify, lighten or darken skin tone, alter hair texture, or substitute a similar person.\",\n  \"SCALE AND POSE LOCK: Match the exact head and shoulder scale of the fans standing immediately behind the green seats so the person fits compactly inside Seat 1 alone (never oversized across two seats). Seated upright facing the camera inside Seat 1, both knees and thighs kept together strictly within Seat 1, the person's right fist (on the viewer's far left, near the left border) raised in celebration, and the person's left arm tucked close to their own torso with the left hand resting on their own left thigh inside x<=25% so no elbow, forearm or shirt crosses into Seat 2 (in front of the striped red-and-black shirt). Plain dark trousers, warm authentic open smile.\",\n  \"PRODUCT LOCK: Reproduce the green football shirt from Image 3 with its exact dark green color, vertical white lettering, starball and shield crests, and red-and-white collar and sleeve trims fitted naturally. Do not redesign or invent text.\",\n  \"PRESERVE: Camera, crop, Brazilian crowd in European club shirts behind, lighting and colors of Image 1. Seats 2, 3 and 4 on the right keep their clean glossy green backrests and red stars completely visible and unobstructed.\",\n  \"INTEGRATE: Match the cool stadium floodlight from the upper front left with realistic contact shadows on Seat 1 and natural highlights on hair, skin and jersey.\",\n  \"AVOID: Never place the person in Seat 2, 3 or 4. Never spread knees or elbows into Seat 2. No text or names added to any seat. No second person from Image 2. Nothing held in the hands.\"\n].join('\\n');\n\nconst retryPrefix = \"CRITICAL CORRECTION: Seat the person ONLY in the 1st leftmost green chair right next to the left-edge red seat, directly in front of the white t-shirt fan. Keep the 2nd, 3rd and 4th green chairs 100% empty. \";\n\nconst sharedParts = [\n  { inline_data: { mime_type: masterMime, data: masterBuffer.toString('base64') } },\n  { inline_data: { mime_type: selfieMime, data: selfieBuffer.toString('base64') } },\n  { inline_data: { mime_type: jerseyMime, data: jerseyBuffer.toString('base64') } }\n];\n\nconst generationConfig = {\n  responseModalities: ['IMAGE'],\n  imageConfig: {\n    aspectRatio: '4:5',\n    imageSize: '1K'\n  },\n  thinkingConfig: {\n    thinkingLevel: 'HIGH'\n  }\n};\n\nreturn [\n  {\n    json: {\n      jobId: webhookBody.jobId,\n      names: webhookBody.names,\n      composeUrl: webhookBody.composeUrl,\n      jobPatchUrl: webhookBody.jobPatchUrl,\n      startedAt,\n      ts,\n      geminiBody: {\n        contents: [\n          {\n            role: 'user',\n            parts: [{ text: promptB }, ...sharedParts]\n          }\n        ],\n        generationConfig\n      },\n      geminiRetryBody: {\n        contents: [\n          {\n            role: 'user',\n            parts: [{ text: retryPrefix + promptB }, ...sharedParts]\n          }\n        ],\n        generationConfig\n      }\n    }\n  }\n];"
+      },
+      "id": "node-montar-payload",
+      "name": "Montar Payload Nano Banana 2.1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-nano-banana-2.1:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiBody) }}",
+        "options": {
+          "timeout": 75000
+        }
+      },
+      "id": "node-chamar-gemini",
+      "name": "Gemini Nano Banana 2.1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2140, 80],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Montar Payload Nano Banana 2.1').first().json;\nconst durationMs = Date.now() - Number(base.startedAt || Date.now());\nconst candidate = $json?.candidates?.[0];\nconst finishReason = candidate?.finishReason || '';\nconst parts = candidate?.content?.parts || [];\nlet foundData = null;\nfor (const p of parts) {\n  const inline = p?.inlineData || p?.inline_data;\n  if (inline?.data) {\n    foundData = inline.data;\n    break;\n  }\n}\n\nconst isSafetyRefusal = ['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'RECITATION'].includes(finishReason);\n\nreturn [\n  {\n    json: {\n      jobId: base.jobId,\n      names: base.names,\n      composeUrl: base.composeUrl,\n      jobPatchUrl: base.jobPatchUrl,\n      durationMs,\n      finishReason,\n      validImage: Boolean(foundData) && !isSafetyRefusal,\n      composedImageBase64: foundData\n    }\n  }\n];"
+      },
+      "id": "node-extrair-imagem",
+      "name": "Extrair Imagem Gemini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2380, 20]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-valid-image",
+              "leftValue": "={{ $json.validImage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-imagem-valida",
+      "name": "Imagem IA Valida",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2620, 20]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.composeUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"jobId\": $json.jobId, \"mode\": \"ai\", \"names\": $json.names, \"composedImageBase64\": $json.composedImageBase64, \"strictSeatCheck\": true } }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "node-compose-ai",
+      "name": "Compor Final IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, -80],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-nano-banana-2.1:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Montar Payload Nano Banana 2.1').first().json.geminiRetryBody) }}",
+        "options": {
+          "timeout": 75000
+        }
+      },
+      "id": "node-gemini-retry-cadeira1",
+      "name": "Gemini Retry Cadeira 1 (1K)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3140, 140],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Montar Payload Nano Banana 2.1').first().json;\nconst durationMs = Date.now() - Number(base.startedAt || Date.now());\nconst candidate = $json?.candidates?.[0];\nconst finishReason = candidate?.finishReason || '';\nconst parts = candidate?.content?.parts || [];\nlet foundData = null;\nfor (const p of parts) {\n  const inline = p?.inlineData || p?.inline_data;\n  if (inline?.data) {\n    foundData = inline.data;\n    break;\n  }\n}\n\nconst isSafetyRefusal = ['SAFETY', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT', 'RECITATION'].includes(finishReason);\n\nreturn [\n  {\n    json: {\n      jobId: base.jobId,\n      names: base.names,\n      composeUrl: base.composeUrl,\n      jobPatchUrl: base.jobPatchUrl,\n      durationMs,\n      finishReason,\n      validImage: Boolean(foundData) && !isSafetyRefusal,\n      composedImageBase64: foundData\n    }\n  }\n];"
+      },
+      "id": "node-extrair-imagem-retry",
+      "name": "Extrair Imagem Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3380, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-valid-retry-image",
+              "leftValue": "={{ $json.validImage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-retry-valida",
+      "name": "Imagem Retry Valida",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3620, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.composeUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"jobId\": $json.jobId, \"mode\": \"ai\", \"names\": $json.names, \"composedImageBase64\": $json.composedImageBase64, \"strictSeatCheck\": true } }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "node-compose-ai-retry",
+      "name": "Compor Final IA Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3860, 40],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.composeUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"jobId\": $('Webhook Arquibancada').first().json.body.jobId, \"mode\": \"fallback\", \"names\": $('Webhook Arquibancada').first().json.body.names } }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "node-compose-fallback",
+      "name": "Executar Plano B Automatico",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3860, 340]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.APP_BASE_URL || $env.NEXT_PUBLIC_APP_URL || 'http://localhost:3033') + '/api/share-image/' + $('Webhook Arquibancada').first().json.body.jobId }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "finalImage"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "node-baixar-final",
+      "name": "Baixar Arte Final Composta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4140, 80],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-drive-dir-final",
+              "leftValue": "={{ $env.DRIVE_OUTPUT_DIR || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-drive-final",
+      "name": "Drive Ativo Resultado",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4380, 80]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $env.DRIVE_OUTPUT_DIR + '/arquibancada_' + $('Webhook Arquibancada').first().json.body.jobId + '_resultado.jpg' }}",
+        "dataPropertyName": "finalImage",
+        "options": {}
+      },
+      "id": "node-salvar-resultado-drive",
+      "name": "Salvar Resultado no Google Drive",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [4620, 40],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Webhook Arquibancada').first().json.body.jobPatchUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"durationMs\": $('Montar Payload Nano Banana 2.1').isExecuted ? Math.max(0, Date.now() - Number($('Montar Payload Nano Banana 2.1').first().json.startedAt || Date.now())) : 0 } }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node-patch-done",
+      "name": "Registrar Done + Metrica",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4860, 80]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "node-cron-cleanup",
+      "name": "Cron Limpeza 24h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.APP_BASE_URL || $env.NEXT_PUBLIC_APP_URL || 'http://localhost:3033') + '/api/internal/cleanup' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-secret",
+              "value": "={{ $env.INTERNAL_SIGNING_SECRET || $env.INTERNAL_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node-chamar-cleanup",
+      "name": "Executar Cleanup 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 700]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Arquibancada": {
+      "main": [
+        [
+          {
+            "node": "Validar Secret Interno",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Secret Interno": {
+      "main": [
+        [
+          {
+            "node": "Responder 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder 202 Accepted": {
+      "main": [
+        [
+          {
+            "node": "Marcar Status Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar Status Processing": {
+      "main": [
+        [
+          {
+            "node": "Download Master 4x5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Master 4x5": {
+      "main": [
+        [
+          {
+            "node": "Download Selfie Assinada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Selfie Assinada": {
+      "main": [
+        [
+          {
+            "node": "Download Camisa Oficial",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Drive Ativo Selfie",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Ativo Selfie": {
+      "main": [
+        [
+          {
+            "node": "Salvar Selfie no Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Camisa Oficial": {
+      "main": [
+        [
+          {
+            "node": "Montar Payload Nano Banana 2.1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Payload Nano Banana 2.1": {
+      "main": [
+        [
+          {
+            "node": "Gemini Nano Banana 2.1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Nano Banana 2.1": {
+      "main": [
+        [
+          {
+            "node": "Extrair Imagem Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Imagem Gemini": {
+      "main": [
+        [
+          {
+            "node": "Imagem IA Valida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Imagem IA Valida": {
+      "main": [
+        [
+          {
+            "node": "Compor Final IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini Retry Cadeira 1 (1K)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compor Final IA": {
+      "main": [
+        [
+          {
+            "node": "Baixar Arte Final Composta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini Retry Cadeira 1 (1K)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Retry Cadeira 1 (1K)": {
+      "main": [
+        [
+          {
+            "node": "Extrair Imagem Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Imagem Retry": {
+      "main": [
+        [
+          {
+            "node": "Imagem Retry Valida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Imagem Retry Valida": {
+      "main": [
+        [
+          {
+            "node": "Compor Final IA Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compor Final IA Retry": {
+      "main": [
+        [
+          {
+            "node": "Baixar Arte Final Composta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Executar Plano B Automatico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar Plano B Automatico": {
+      "main": [
+        [
+          {
+            "node": "Baixar Arte Final Composta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar Arte Final Composta": {
+      "main": [
+        [
+          {
+            "node": "Drive Ativo Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Ativo Resultado": {
+      "main": [
+        [
+          {
+            "node": "Salvar Resultado no Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Done + Metrica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Resultado no Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Registrar Done + Metrica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cron Limpeza 24h": {
+      "main": [
+        [
+          {
+            "node": "Executar Cleanup 24h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "timezone": "America/Sao_Paulo"
+  },
+  "versionId": "1.2.0",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    {
+      "name": "arquibancada-ucl2027"
+    }
+  ]
+}
